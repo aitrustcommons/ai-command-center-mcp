@@ -1,0 +1,27 @@
+services:
+  mcp:
+    container_name: aicc-mcp
+    build:
+      context: ../..
+      dockerfile: deployment/docker/Dockerfile
+    ports:
+      - "127.0.0.1:8443:8443"
+    env_file:
+      - ../.env.production
+    environment:
+      - TZ=America/Los_Angeles
+    volumes:
+      - /opt/app/data:/app/data
+      - /opt/app/logs:/app/logs
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
