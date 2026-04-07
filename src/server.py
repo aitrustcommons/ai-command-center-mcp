@@ -533,32 +533,13 @@ async def health_check(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
-# Build the combined ASGI application
+# Build the ASGI application
 # ---------------------------------------------------------------------------
-def create_app() -> Starlette:
-    """Create the full ASGI application with auth middleware and MCP routes."""
-    # Get the MCP Starlette app
-    mcp_app = mcp.streamable_http_app()
+# Get the MCP Starlette app (preserves lifespan and task group initialization)
+app = mcp.streamable_http_app()
 
-    # Wrap with auth middleware
-    # We need to intercept requests before they hit MCP to inject the user
-    from starlette.middleware import Middleware
-
-    app = Starlette(
-        routes=mcp_app.routes,
-        middleware=[
-            Middleware(AuthMiddleware),
-        ],
-        exception_handlers=mcp_app.exception_handlers if hasattr(mcp_app, 'exception_handlers') else {},
-    )
-
-    return app
-
-
-# ---------------------------------------------------------------------------
-# Run
-# ---------------------------------------------------------------------------
-app = create_app()
+# Add auth middleware directly to the MCP app
+app.add_middleware(AuthMiddleware)
 
 if __name__ == "__main__":
     logger.info(
