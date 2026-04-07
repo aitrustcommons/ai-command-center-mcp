@@ -1,6 +1,6 @@
 # AI Command Center -- MCP Server
 
-A multi-tenant MCP server that gives any MCP-compatible AI client full access to a user's [AI Command Center](https://github.com/aitrustcommons/ai-command-center) system: identity, personalities, status, content, and work items.
+A multi-tenant MCP server that gives any MCP-compatible AI client full access to a user's [AI Command Center](https://github.com/TheIntentLayer/ai-command-center) system: identity, personalities, status, content, and work items.
 
 ## What This Does
 

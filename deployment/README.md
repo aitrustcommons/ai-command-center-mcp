@@ -26,7 +26,7 @@ Domain: `mcp.theintentlayer.com`
 ssh root@<droplet-ip>
 
 # 2. Clone the repo
-git clone https://github.com/aitrustcommons/ai-command-center-mcp.git /opt/app
+git clone https://github.com/TheIntentLayer/ai-command-center-mcp.git /opt/app
 cd /opt/app
 
 # 3. Run setup (installs Docker, nginx, creates directories)
