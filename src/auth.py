@@ -7,6 +7,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from src import config
 from src.db import UserConfig, lookup_user, lookup_user_any
 
 logger = logging.getLogger("auth")
@@ -28,7 +29,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         # Extract API key from Authorization header
         auth_header = request.headers.get("authorization", "")
-        if not auth_header.startswith("Bearer "):
+        if auth_header.startswith("Bearer "):
+            api_key = auth_header[7:]  # Strip "Bearer "
+        elif config.DEFAULT_USER_KEY:
+            # No auth header but a default user is configured.
+            # This supports claude.ai connectors which don't send API keys.
+            api_key = config.DEFAULT_USER_KEY
+            logger.debug(f"No auth header from {request.client.host}, using default user")
+        else:
             logger.warning(
                 f"Missing or malformed Authorization header from {request.client.host}"
             )
@@ -40,8 +48,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     "message": "Missing or malformed Authorization header. Expected: Bearer <api_key>",
                 },
             )
-
-        api_key = auth_header[7:]  # Strip "Bearer "
 
         # Check if user exists (including disabled)
         user_any = lookup_user_any(api_key)

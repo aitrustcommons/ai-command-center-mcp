@@ -13,7 +13,12 @@ PORT: int = int(os.getenv("AICC_PORT", "8443"))
 DB_PATH: str = os.getenv("AICC_DB_PATH", "./aicc.db")
 LOG_LEVEL: str = os.getenv("AICC_LOG_LEVEL", "info").upper()
 LOG_DIR: str = os.getenv("AICC_LOG_DIR", "./logs")
-VERSION: str = "1.0.0"
+VERSION: str = "1.0.1"
+
+# Default user API key -- used when no Authorization header is provided.
+# Set this to a valid API key to allow claude.ai connectors (which don't
+# send API keys) to use the server. Leave empty to require auth on all requests.
+DEFAULT_USER_KEY: str = os.getenv("AICC_DEFAULT_USER_KEY", "")
 
 # Ensure log directory exists
 Path(LOG_DIR).mkdir(parents=True, exist_ok=True)
