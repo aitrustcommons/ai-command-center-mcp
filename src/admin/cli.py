@@ -2,7 +2,7 @@
 
 Usage:
     python -m src.admin.cli init
-    python -m src.admin.cli add --name "Nikhil" --github-owner nikhilsi ...
+    python -m src.admin.cli add --name "Nikhil" --email nikhil@example.com --github-owner nikhilsi ...
     python -m src.admin.cli list
     python -m src.admin.cli disable --key aicc-xxx
     python -m src.admin.cli enable --key aicc-xxx
@@ -23,7 +23,7 @@ def cmd_init(args: argparse.Namespace) -> None:
 
 
 def cmd_add(args: argparse.Namespace) -> None:
-    """Add a new user."""
+    """Add a new user (emergency fallback -- primary path is the website)."""
     db.init_db(args.db)  # Ensure schema exists
     api_key = db.add_user(
         name=args.name,
@@ -51,10 +51,12 @@ def cmd_list(args: argparse.Namespace) -> None:
 
     for user in users:
         status = "active" if user["active"] else "DISABLED"
+        setup = "ready" if user["setup_complete"] else "pending"
         az_info = f", az={user['az_org']}/{user['az_project']}" if user["az_org"] else ""
+        gh_info = f"{user['github_owner']}/{user['github_repo']}" if user["github_owner"] else "no repo"
         print(
-            f"  [{status}] {user['name']} ({user['email']}) "
-            f"-- {user['github_owner']}/{user['github_repo']}"
+            f"  [{status}/{setup}] {user['name']} ({user['email']}) "
+            f"-- {gh_info}"
             f"{az_info}"
             f" -- key={user['api_key'][:16]}..."
             f" -- created={user['created_at']}"
@@ -113,9 +115,9 @@ def main() -> None:
     sub.add_parser("init", help="Initialize the database")
 
     # add
-    add_p = sub.add_parser("add", help="Add a new user")
+    add_p = sub.add_parser("add", help="Add a new user (emergency fallback)")
     add_p.add_argument("--name", required=True)
-    add_p.add_argument("--email", default=None)
+    add_p.add_argument("--email", required=True)
     add_p.add_argument("--github-owner", required=True)
     add_p.add_argument("--github-repo", required=True)
     add_p.add_argument("--github-pat", required=True)

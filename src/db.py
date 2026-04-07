@@ -1,4 +1,9 @@
-"""SQLite database for user configuration."""
+"""SQLite database for user configuration.
+
+The website (theintentlayer.com) owns the users table schema. This module
+creates it only if it doesn't exist (for standalone testing / CLI use).
+In production, the shared database is already initialized by the website.
+"""
 
 import logging
 import secrets
@@ -11,21 +16,30 @@ logger = logging.getLogger("db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
-    api_key TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
-    email TEXT,
-    github_owner TEXT NOT NULL,
-    github_repo TEXT NOT NULL,
-    github_pat TEXT NOT NULL,
-    github_branch TEXT NOT NULL DEFAULT 'main',
+    email TEXT UNIQUE NOT NULL,
+    password_hash TEXT,
+    google_id TEXT UNIQUE,
+    github_id TEXT UNIQUE,
+    github_owner TEXT,
+    github_repo TEXT,
+    github_pat TEXT,
+    github_branch TEXT DEFAULT 'main',
     az_org TEXT,
     az_project TEXT,
     az_pat TEXT,
+    api_key TEXT UNIQUE NOT NULL,
+    setup_complete INTEGER NOT NULL DEFAULT 0,
     active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_login TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_users_active ON users(active);
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_api_key ON users(api_key);
+CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id);
+CREATE INDEX IF NOT EXISTS idx_users_github_id ON users(github_id);
 """
 
 
@@ -33,16 +47,18 @@ CREATE INDEX IF NOT EXISTS idx_users_active ON users(active);
 class UserConfig:
     """User configuration loaded from the database."""
 
-    api_key: str
+    id: int
     name: str
-    email: str | None
-    github_owner: str
-    github_repo: str
-    github_pat: str
+    email: str
+    api_key: str
+    github_owner: str | None
+    github_repo: str | None
+    github_pat: str | None
     github_branch: str
     az_org: str | None
     az_project: str | None
     az_pat: str | None
+    setup_complete: int
     active: int
     created_at: str
 
@@ -62,7 +78,7 @@ def get_connection(db_path: str | None = None) -> sqlite3.Connection:
 
 
 def init_db(db_path: str | None = None) -> None:
-    """Initialize the database schema."""
+    """Initialize the database schema (creates table only if it doesn't exist)."""
     conn = get_connection(db_path)
     try:
         conn.executescript(SCHEMA)
@@ -72,16 +88,37 @@ def init_db(db_path: str | None = None) -> None:
         conn.close()
 
 
+def _row_to_config(row: sqlite3.Row) -> UserConfig:
+    """Convert a database row to a UserConfig dataclass."""
+    return UserConfig(
+        id=row["id"],
+        name=row["name"],
+        email=row["email"],
+        api_key=row["api_key"],
+        github_owner=row["github_owner"],
+        github_repo=row["github_repo"],
+        github_pat=row["github_pat"],
+        github_branch=row["github_branch"] or "main",
+        az_org=row["az_org"],
+        az_project=row["az_project"],
+        az_pat=row["az_pat"],
+        setup_complete=row["setup_complete"],
+        active=row["active"],
+        created_at=row["created_at"],
+    )
+
+
 def lookup_user(api_key: str, db_path: str | None = None) -> UserConfig | None:
-    """Look up a user by API key. Returns None if not found or inactive."""
+    """Look up a user by API key. Returns None if not found, inactive, or setup incomplete."""
     conn = get_connection(db_path)
     try:
         row = conn.execute(
-            "SELECT * FROM users WHERE api_key = ? AND active = 1", (api_key,)
+            "SELECT * FROM users WHERE api_key = ? AND active = 1 AND setup_complete = 1",
+            (api_key,),
         ).fetchone()
         if row is None:
             return None
-        return UserConfig(**dict(row))
+        return _row_to_config(row)
     finally:
         conn.close()
 
@@ -95,34 +132,55 @@ def lookup_user_any(api_key: str, db_path: str | None = None) -> UserConfig | No
         ).fetchone()
         if row is None:
             return None
-        return UserConfig(**dict(row))
+        return _row_to_config(row)
+    finally:
+        conn.close()
+
+
+def lookup_user_by_id(user_id: int, db_path: str | None = None) -> UserConfig | None:
+    """Look up a user by ID. Returns None if not found, inactive, or setup incomplete.
+
+    Used by JWT auth: the website's OAuth flow puts user.id in the JWT sub claim.
+    """
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute(
+            "SELECT * FROM users WHERE id = ? AND active = 1 AND setup_complete = 1",
+            (user_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return _row_to_config(row)
     finally:
         conn.close()
 
 
 def add_user(
     name: str,
+    email: str,
     github_owner: str,
     github_repo: str,
     github_pat: str,
-    email: str | None = None,
     github_branch: str = "main",
     az_org: str | None = None,
     az_project: str | None = None,
     az_pat: str | None = None,
     db_path: str | None = None,
 ) -> str:
-    """Add a new user and return the generated API key."""
+    """Add a new user via CLI (emergency fallback). Returns the generated API key.
+
+    Creates a full user row with password_hash=None and setup_complete=1.
+    """
     api_key = generate_api_key()
     conn = get_connection(db_path)
     try:
         conn.execute(
             """INSERT INTO users
-               (api_key, name, email, github_owner, github_repo, github_pat,
-                github_branch, az_org, az_project, az_pat)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (name, email, api_key, github_owner, github_repo, github_pat,
+                github_branch, az_org, az_project, az_pat, setup_complete)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)""",
             (
-                api_key, name, email, github_owner, github_repo, github_pat,
+                name, email, api_key, github_owner, github_repo, github_pat,
                 github_branch, az_org, az_project, az_pat,
             ),
         )
@@ -138,8 +196,8 @@ def list_users(db_path: str | None = None) -> list[dict]:
     conn = get_connection(db_path)
     try:
         rows = conn.execute(
-            "SELECT api_key, name, email, github_owner, github_repo, "
-            "github_branch, az_org, az_project, active, created_at FROM users"
+            "SELECT id, api_key, name, email, github_owner, github_repo, "
+            "github_branch, az_org, az_project, active, setup_complete, created_at FROM users"
         ).fetchall()
         return [dict(row) for row in rows]
     finally:
@@ -205,34 +263,6 @@ def remove_user(api_key: str, db_path: str | None = None) -> bool:
             logger.info(f"User removed: {api_key[:12]}...")
             return True
         return False
-    finally:
-        conn.close()
-
-
-def lookup_user_by_account(account_id: int, db_path: str | None = None) -> UserConfig | None:
-    """Look up a user by account_id via the account_api_keys join table.
-
-    The website creates accounts (for login/OAuth) and links them to MCP
-    API keys via account_api_keys. When claude.ai sends a JWT with an
-    account_id (sub claim), we use this to find the user's MCP config.
-    Returns the first active linked user, or None.
-    """
-    conn = get_connection(db_path)
-    try:
-        row = conn.execute(
-            """SELECT u.* FROM users u
-               JOIN account_api_keys ak ON u.api_key = ak.api_key
-               WHERE ak.account_id = ? AND u.active = 1
-               LIMIT 1""",
-            (account_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        return UserConfig(**dict(row))
-    except sqlite3.OperationalError:
-        # account_api_keys table may not exist yet (website not deployed)
-        logger.debug("account_api_keys table not found -- JWT auth unavailable")
-        return None
     finally:
         conn.close()
 

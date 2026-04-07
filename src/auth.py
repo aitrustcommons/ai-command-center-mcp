@@ -9,7 +9,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from src import config
-from src.db import UserConfig, lookup_user, lookup_user_any, lookup_user_by_account
+from src.db import UserConfig, lookup_user, lookup_user_any, lookup_user_by_id
 
 logger = logging.getLogger("auth")
 
@@ -111,7 +111,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
         return lookup_user(token)
 
     def _try_jwt(self, token: str) -> UserConfig | None:
-        """Try to authenticate with the token as a JWT from the OAuth flow."""
+        """Try to authenticate with the token as a JWT from the OAuth flow.
+
+        The JWT sub claim contains the user.id from the unified users table.
+        """
         try:
             payload = jwt.decode(
                 token,
@@ -120,16 +123,16 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 audience="https://mcp.theintentlayer.com/mcp",
                 issuer="https://theintentlayer.com",
             )
-            account_id = payload.get("sub")
-            if account_id is None:
+            user_id = payload.get("sub")
+            if user_id is None:
                 logger.warning("JWT missing sub claim")
                 return None
 
-            user = lookup_user_by_account(int(account_id))
+            user = lookup_user_by_id(int(user_id))
             if user:
-                logger.info(f"JWT auth successful for account {account_id} -> user {user.name}")
+                logger.info(f"JWT auth successful for user {user_id} -> {user.name}")
             else:
-                logger.warning(f"JWT valid but no linked MCP user for account {account_id}")
+                logger.warning(f"JWT valid but no configured user for id {user_id}")
             return user
 
         except jwt.ExpiredSignatureError:
