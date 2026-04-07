@@ -9,6 +9,7 @@ import json
 import logging
 import re
 
+from src.backends import azdevops_api as azdevops
 from src.backends import github_api as github
 from src.db import UserConfig
 from src.exceptions import (
@@ -151,8 +152,19 @@ async def load_context(user: UserConfig, mode: str | None = None) -> dict:
         except FileNotFoundError_:
             boot_context[ref["path"]] = f"[File not found: {ref['path']}]"
 
-    # Recent activity
+    # Recent activity (git log equivalent)
     commits = await github.get_commits(user, count=20)
+
+    # Work items list (CLAUDE.md step 1.4: az_ops.py list)
+    work_items = []
+    if user.az_org and user.az_project and user.az_pat:
+        try:
+            work_items = await azdevops.list_work_items(user)
+        except Exception as e:
+            logger.warning(f"Failed to load work items at boot: {e}")
+
+    # System awareness: all active personalities so the model knows it's one of N
+    all_personalities = await _list_active_personalities(user)
 
     return {
         "identity_rules": identity_rules,
@@ -163,6 +175,16 @@ async def load_context(user: UserConfig, mode: str | None = None) -> dict:
         },
         "boot_files": boot_context,
         "recent_activity": commits,
+        "work_items": work_items,
+        "system_awareness": {
+            "active_personality": mode,
+            "all_personalities": [p["display_name"] for p in all_personalities],
+            "total_personalities": len(all_personalities),
+            "note": f"You are running the {personality_data.get('name', mode)} personality. "
+                    f"There are {len(all_personalities)} active personalities in this system. "
+                    f"You do not see other personalities' context. "
+                    f"Do not propose system architecture changes -- flag them for Ops.",
+        },
     }
 
 
