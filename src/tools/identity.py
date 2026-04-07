@@ -25,37 +25,77 @@ logger = logging.getLogger("tools.identity")
 def parse_boot_file_references(behavior_md: str) -> list[dict]:
     """Extract file paths from the boot files section of behavior-rules-and-context.md.
 
+    Looks for boot file references and stops at on-demand/wiki/never-read sections.
+    Handles the inconsistent formatting across different personality files.
+
     Returns list of {"path": str, "type": "file"|"directory"}.
+
+    NOTE: This is a band-aid parser. V5.0 will move boot file lists to a
+    structured JSON config, eliminating the need to parse prose. See
+    system/docs/versions/v50-proposed-design.md.
     """
     results = []
-
-    # Find the boot files section (case-insensitive)
     lines = behavior_md.split("\n")
     in_boot_section = False
     boot_lines = []
 
+    # Stop words: if any of these appear in a line (case-insensitive, ignoring
+    # markdown bold markers), we've left the boot section. Covers all known
+    # personality file variations.
+    STOP_PATTERNS = [
+        "on demand",
+        "on-demand",
+        "wiki page",
+        "wiki pages",
+        "never read",
+        "do not read at boot",
+    ]
+
     for line in lines:
-        # Start of boot files section
-        if re.search(r"files\s*\(read at boot", line, re.IGNORECASE):
-            in_boot_section = True
+        stripped = line.strip()
+        # Remove markdown bold markers for matching
+        stripped_clean = stripped.replace("**", "").replace("*", "").lower()
+
+        # Start triggers: various ways personalities declare boot files
+        if not in_boot_section:
+            if re.search(r"read at boot", stripped_clean):
+                in_boot_section = True
+                # CueSpan style: "At boot, read everything in `cuespan/docs/`."
+                # The trigger line itself may contain a path
+                backtick_paths = re.findall(r"`([^`]+)`", line)
+                for path in backtick_paths:
+                    path = path.strip()
+                    if path:
+                        if path.endswith("/"):
+                            results.append({"path": path.rstrip("/"), "type": "directory"})
+                        else:
+                            results.append({"path": path, "type": "file"})
+                continue
+            # CueSpan also has "Also read at boot:"
+            if re.search(r"also read at boot", stripped_clean):
+                in_boot_section = True
+                continue
             continue
 
-        if in_boot_section:
-            # Stop at next section header or "on demand" / "wiki" subsection
-            stripped = line.strip().lower()
-            if stripped.startswith("##"):
-                break
-            if stripped.startswith("on demand") or stripped.startswith("wiki"):
-                break
-            if re.match(r"^#+\s", line):
-                break
+        # We're in the boot section. Check stop conditions.
 
-            boot_lines.append(line)
+        # Stop at section headers (## or ###)
+        if re.match(r"^#{1,3}\s", stripped):
+            break
 
-    # Extract backtick-quoted paths from bullet points
+        # Stop at any stop pattern (handles bold, plain, with or without colons)
+        if any(pattern in stripped_clean for pattern in STOP_PATTERNS):
+            break
+
+        # Stop at a new bold subsection that isn't about boot files
+        # e.g., "**Wiki pages (clone and check):**"
+        if stripped_clean.startswith(("wiki", "on demand", "on-demand", "never")):
+            break
+
+        boot_lines.append(line)
+
+    # Extract backtick-quoted paths from boot lines only
     for line in boot_lines:
-        # Match: - `path/to/file.md` or - `path/to/dir/`
-        # Also match: "read everything in `path/`"
         backtick_paths = re.findall(r"`([^`]+)`", line)
         for path in backtick_paths:
             path = path.strip()
