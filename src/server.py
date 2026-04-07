@@ -508,6 +508,36 @@ async def tool_log_daily_summary(summary: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# OAuth Discovery (well-known endpoints on the MCP domain)
+# These tell claude.ai where to find our authorization server (the website).
+# ---------------------------------------------------------------------------
+@mcp.custom_route("/.well-known/oauth-protected-resource", methods=["GET"])
+async def oauth_protected_resource(request: Request) -> JSONResponse:
+    """RFC 9728: Protected Resource Metadata."""
+    return JSONResponse(content={
+        "resource": "https://mcp.theintentlayer.com/mcp",
+        "authorization_servers": ["https://theintentlayer.com"],
+        "scopes_supported": ["mcp:tools", "mcp:resources"],
+    })
+
+
+@mcp.custom_route("/.well-known/oauth-authorization-server", methods=["GET"])
+async def oauth_auth_server_metadata(request: Request) -> JSONResponse:
+    """RFC 8414: Authorization Server Metadata (points to the website)."""
+    return JSONResponse(content={
+        "issuer": "https://theintentlayer.com",
+        "authorization_endpoint": "https://theintentlayer.com/oauth/authorize",
+        "token_endpoint": "https://theintentlayer.com/oauth/token",
+        "registration_endpoint": "https://theintentlayer.com/oauth/register",
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "code_challenge_methods_supported": ["S256"],
+        "scopes_supported": ["mcp:tools", "mcp:resources"],
+        "token_endpoint_auth_methods_supported": ["none"],
+    })
+
+
+# ---------------------------------------------------------------------------
 # Health Check (custom route, not an MCP tool)
 # ---------------------------------------------------------------------------
 @mcp.custom_route("/health", methods=["GET"])

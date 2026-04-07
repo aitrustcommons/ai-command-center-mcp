@@ -13,12 +13,12 @@ PORT: int = int(os.getenv("AICC_PORT", "8443"))
 DB_PATH: str = os.getenv("AICC_DB_PATH", "./aicc.db")
 LOG_LEVEL: str = os.getenv("AICC_LOG_LEVEL", "info").upper()
 LOG_DIR: str = os.getenv("AICC_LOG_DIR", "./logs")
-VERSION: str = "1.0.1"
+VERSION: str = "1.1.0"
 
-# Default user API key -- used when no Authorization header is provided.
-# Set this to a valid API key to allow claude.ai connectors (which don't
-# send API keys) to use the server. Leave empty to require auth on all requests.
-DEFAULT_USER_KEY: str = os.getenv("AICC_DEFAULT_USER_KEY", "")
+# JWT secret shared with the website (theintentlayer.com) for OAuth token validation.
+# When claude.ai connects via OAuth, it sends a JWT Bearer token signed with this secret.
+# The MCP server validates the token and looks up the user by account_id.
+JWT_SECRET: str = os.getenv("AICC_JWT_SECRET", "")
 
 # Ensure log directory exists
 Path(LOG_DIR).mkdir(parents=True, exist_ok=True)

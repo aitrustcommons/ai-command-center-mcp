@@ -209,6 +209,34 @@ def remove_user(api_key: str, db_path: str | None = None) -> bool:
         conn.close()
 
 
+def lookup_user_by_account(account_id: int, db_path: str | None = None) -> UserConfig | None:
+    """Look up a user by account_id via the account_api_keys join table.
+
+    The website creates accounts (for login/OAuth) and links them to MCP
+    API keys via account_api_keys. When claude.ai sends a JWT with an
+    account_id (sub claim), we use this to find the user's MCP config.
+    Returns the first active linked user, or None.
+    """
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute(
+            """SELECT u.* FROM users u
+               JOIN account_api_keys ak ON u.api_key = ak.api_key
+               WHERE ak.account_id = ? AND u.active = 1
+               LIMIT 1""",
+            (account_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return UserConfig(**dict(row))
+    except sqlite3.OperationalError:
+        # account_api_keys table may not exist yet (website not deployed)
+        logger.debug("account_api_keys table not found -- JWT auth unavailable")
+        return None
+    finally:
+        conn.close()
+
+
 def check_health(db_path: str | None = None) -> bool:
     """Check database health. Returns True if healthy."""
     try:
