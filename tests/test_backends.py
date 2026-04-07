@@ -9,6 +9,7 @@ from src.validation import validate_mode
 @pytest.fixture
 def user():
     return UserConfig(
+        id=1,
         api_key="aicc-test",
         name="Test User",
         email="test@example.com",
@@ -19,6 +20,7 @@ def user():
         az_org="testorg",
         az_project="The Big Push",
         az_pat="azpat_test",
+        setup_complete=1,
         active=1,
         created_at="2026-01-01",
     )

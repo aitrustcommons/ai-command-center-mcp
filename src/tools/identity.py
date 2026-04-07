@@ -22,106 +22,29 @@ from src.validation import validate_mode, validate_path
 logger = logging.getLogger("tools.identity")
 
 
-def parse_boot_file_references(behavior_md: str) -> list[dict]:
-    """Extract file paths from the boot files section of behavior-rules-and-context.md.
-
-    Looks for boot file references and stops at on-demand/wiki/never-read sections.
-    Handles the inconsistent formatting across different personality files.
-
-    Returns list of {"path": str, "type": "file"|"directory"}.
-
-    NOTE: This is a band-aid parser. V5.0 will move boot file lists to a
-    structured JSON config, eliminating the need to parse prose. See
-    system/docs/versions/v50-proposed-design.md.
-    """
-    results = []
-    lines = behavior_md.split("\n")
-    in_boot_section = False
-    boot_lines = []
-
-    # Stop words: if any of these appear in a line (case-insensitive, ignoring
-    # markdown bold markers), we've left the boot section. Covers all known
-    # personality file variations.
-    STOP_PATTERNS = [
-        "on demand",
-        "on-demand",
-        "wiki page",
-        "wiki pages",
-        "never read",
-        "do not read at boot",
-    ]
-
-    for line in lines:
-        stripped = line.strip()
-        # Remove markdown bold markers for matching
-        stripped_clean = stripped.replace("**", "").replace("*", "").lower()
-
-        # Start triggers: various ways personalities declare boot files
-        if not in_boot_section:
-            if re.search(r"read at boot", stripped_clean):
-                in_boot_section = True
-                # CueSpan style: "At boot, read everything in `cuespan/docs/`."
-                # The trigger line itself may contain a path
-                backtick_paths = re.findall(r"`([^`]+)`", line)
-                for path in backtick_paths:
-                    path = path.strip()
-                    if path:
-                        if path.endswith("/"):
-                            results.append({"path": path.rstrip("/"), "type": "directory"})
-                        else:
-                            results.append({"path": path, "type": "file"})
-                continue
-            # CueSpan also has "Also read at boot:"
-            if re.search(r"also read at boot", stripped_clean):
-                in_boot_section = True
-                continue
-            continue
-
-        # We're in the boot section. Check stop conditions.
-
-        # Stop at section headers (## or ###)
-        if re.match(r"^#{1,3}\s", stripped):
-            break
-
-        # Stop at any stop pattern (handles bold, plain, with or without colons)
-        if any(pattern in stripped_clean for pattern in STOP_PATTERNS):
-            break
-
-        # Stop at a new bold subsection that isn't about boot files
-        # e.g., "**Wiki pages (clone and check):**"
-        if stripped_clean.startswith(("wiki", "on demand", "on-demand", "never")):
-            break
-
-        boot_lines.append(line)
-
-    # Extract backtick-quoted paths from boot lines only
-    for line in boot_lines:
-        backtick_paths = re.findall(r"`([^`]+)`", line)
-        for path in backtick_paths:
-            path = path.strip()
-            if not path:
-                continue
-
-            # Determine if file or directory
-            if path.endswith("/"):
-                results.append({"path": path.rstrip("/"), "type": "directory"})
-            else:
-                results.append({"path": path, "type": "file"})
-
-    return results
+async def _read_boot_json(user: UserConfig) -> dict:
+    """Read identity/boot.json -- the SST for common boot config."""
+    content = await github.read_file(user, "identity/boot.json")
+    return json.loads(content)
 
 
-async def _list_active_personalities(user: UserConfig) -> list[dict]:
+async def _list_active_personalities(user: UserConfig, personality_dir: str = None) -> list[dict]:
     """List all active personalities from the repo."""
-    personalities_dir = "identity/personalities"
-    entries = await github.list_directory(user, personalities_dir)
+    if personality_dir is None:
+        try:
+            boot = await _read_boot_json(user)
+            personality_dir = boot.get("personality_directory", "identity/personalities")
+        except (FileNotFoundError_, json.JSONDecodeError):
+            personality_dir = "identity/personalities"
+
+    entries = await github.list_directory(user, personality_dir)
 
     result = []
     for entry in entries:
         if entry["type"] == "dir":
             try:
                 pj_content = await github.read_file(
-                    user, f"{personalities_dir}/{entry['name']}/personality.json"
+                    user, f"{personality_dir}/{entry['name']}/personality.json"
                 )
                 data = json.loads(pj_content)
                 if data.get("active", True):
@@ -134,88 +57,107 @@ async def _list_active_personalities(user: UserConfig) -> list[dict]:
                         }
                     )
             except (FileNotFoundError_, json.JSONDecodeError):
-                # Skip directories without valid personality.json
                 continue
 
     return result
 
 
 async def load_context(user: UserConfig, mode: str | None = None) -> dict:
-    """Load the full AI partner context for a conversation."""
+    """Load the full AI partner context for a conversation.
+
+    All paths come from boot.json and personality.json. No hardcoded paths.
+    This mirrors the boot-sequence.md protocol for the MCP path.
+    """
+    # Step 1: Read boot config
+    boot = await _read_boot_json(user)
+    personality_dir = boot.get("personality_directory", "identity/personalities")
+
     if mode is None:
-        # Return list of available personalities
-        personalities = await _list_active_personalities(user)
+        personalities = await _list_active_personalities(user, personality_dir)
         return {"available_personalities": personalities}
 
     mode = validate_mode(mode)
 
-    # Check personality exists
-    try:
-        personality_json = await github.read_file(
-            user, f"identity/personalities/{mode}/personality.json"
-        )
-    except FileNotFoundError_:
-        raise InvalidModeError(mode)
-
-    personality_data = json.loads(personality_json)
-
-    # Load all boot context in parallel-ish (sequential for now, but each is fast)
-    identity_rules = await github.read_file(user, "identity/identity-rules.md")
-    status = await github.read_file(user, "identity/state/status.md")
-    behavior = await github.read_file(
-        user, f"identity/personalities/{mode}/behavior-rules-and-context.md"
-    )
-
-    # Parse behavior file for boot-referenced files
-    boot_refs = parse_boot_file_references(behavior)
-    boot_context = {}
-
-    for ref in boot_refs:
+    # Step 2: Load common context (from boot.json common_files)
+    common_content = {}
+    for path in boot.get("common_files", []):
         try:
-            if ref["type"] == "directory":
-                # List directory and read all files
-                entries = await github.list_directory(user, ref["path"])
-                for entry in entries:
-                    if entry["type"] == "file":
-                        try:
-                            content = await github.read_file(
-                                user, entry["path"]
-                            )
-                            boot_context[entry["path"]] = content
-                        except FileNotFoundError_:
-                            boot_context[entry["path"]] = (
-                                f"[File not found: {entry['path']}]"
-                            )
-            else:
-                content = await github.read_file(user, ref["path"])
-                boot_context[ref["path"]] = content
+            content = await github.read_file(user, path)
+            common_content[path] = content
         except FileNotFoundError_:
-            boot_context[ref["path"]] = f"[File not found: {ref['path']}]"
+            common_content[path] = f"[File not found: {path}]"
 
-    # Recent activity (git log equivalent)
-    commits = await github.get_commits(user, count=20)
+    # Git log (depth from boot.json)
+    git_log_depth = boot.get("git_log_depth", 20)
+    commits = await github.get_commits(user, count=git_log_depth)
 
-    # Work items list (CLAUDE.md step 1.4: az_ops.py list)
+    # Work items (from boot.json work_items config)
     work_items = []
-    if user.az_org and user.az_project and user.az_pat:
+    wi_config = boot.get("work_items", {})
+    if wi_config.get("enabled", False) and user.az_org and user.az_project and user.az_pat:
         try:
             work_items = await azdevops.list_work_items(user)
         except Exception as e:
             logger.warning(f"Failed to load work items at boot: {e}")
 
-    # System awareness: all active personalities so the model knows it's one of N
-    all_personalities = await _list_active_personalities(user)
+    # Step 3: Determine personality
+    personality_path = f"{personality_dir}/{mode}"
+    try:
+        personality_json_content = await github.read_file(
+            user, f"{personality_path}/personality.json"
+        )
+    except FileNotFoundError_:
+        raise InvalidModeError(mode)
 
+    personality_data = json.loads(personality_json_content)
+
+    # Step 4: Load personality context
+    # behavior.md
+    try:
+        behavior = await github.read_file(user, f"{personality_path}/behavior.md")
+    except FileNotFoundError_:
+        behavior = "[behavior.md not found]"
+
+    # boot_files from personality.json
+    boot_files_content = {}
+    for path in personality_data.get("boot_files", []):
+        try:
+            content = await github.read_file(user, path)
+            boot_files_content[path] = content
+        except FileNotFoundError_:
+            boot_files_content[path] = f"[File not found: {path}]"
+
+    # boot_directories from personality.json
+    boot_dir_content = {}
+    for dir_path in personality_data.get("boot_directories", []):
+        try:
+            entries = await github.list_directory(user, dir_path)
+            for entry in entries:
+                if entry["type"] == "file":
+                    try:
+                        content = await github.read_file(user, entry["path"])
+                        boot_dir_content[entry["path"]] = content
+                    except FileNotFoundError_:
+                        boot_dir_content[entry["path"]] = f"[File not found: {entry['path']}]"
+        except FileNotFoundError_:
+            boot_dir_content[dir_path] = f"[Directory not found: {dir_path}]"
+
+    # System awareness
+    all_personalities = await _list_active_personalities(user, personality_dir)
+
+    # Step 5: Return everything (resources/wiki as metadata, not content)
     return {
-        "identity_rules": identity_rules,
-        "current_status": status,
+        "common": common_content,
+        "recent_activity": commits,
+        "work_items": work_items,
         "personality": {
             "metadata": personality_data,
             "behavior_rules": behavior,
         },
-        "boot_files": boot_context,
-        "recent_activity": commits,
-        "work_items": work_items,
+        "boot_files": boot_files_content,
+        "boot_directory_files": boot_dir_content,
+        "resources": personality_data.get("resources", {}),
+        "wiki_pages": personality_data.get("wiki_pages", {}),
         "system_awareness": {
             "active_personality": mode,
             "all_personalities": [p["display_name"] for p in all_personalities],
@@ -230,7 +172,11 @@ async def load_context(user: UserConfig, mode: str | None = None) -> dict:
 
 async def get_identity_rules(user: UserConfig) -> dict:
     """Get the core identity and behavioral rules."""
-    content = await github.read_file(user, "identity/identity-rules.md")
+    boot = await _read_boot_json(user)
+    # identity-rules.md is the first common file by convention
+    common_files = boot.get("common_files", ["identity/identity-rules.md"])
+    path = common_files[0] if common_files else "identity/identity-rules.md"
+    content = await github.read_file(user, path)
     return {"content": content}
 
 
@@ -238,24 +184,27 @@ async def update_identity_rules(
     user: UserConfig, content: str, change_summary: str
 ) -> dict:
     """Update the core identity rules."""
-    validate_path("identity/identity-rules.md")
+    boot = await _read_boot_json(user)
+    common_files = boot.get("common_files", ["identity/identity-rules.md"])
+    path = common_files[0] if common_files else "identity/identity-rules.md"
+    validate_path(path)
 
-    # Get current SHA for update
-    _, sha = await github.read_file_with_sha(user, "identity/identity-rules.md")
-    result = await github.write_file(
-        user, "identity/identity-rules.md", content, change_summary, sha=sha
-    )
+    _, sha = await github.read_file_with_sha(user, path)
+    result = await github.write_file(user, path, content, change_summary, sha=sha)
 
     return {
         "updated": True,
-        "path": "identity/identity-rules.md",
+        "path": path,
         "commit": result.get("commit", {}).get("sha", "")[:7],
     }
 
 
 async def get_current_status(user: UserConfig) -> dict:
     """Get the current status (read-only)."""
-    content = await github.read_file(user, "identity/state/status.md")
+    boot = await _read_boot_json(user)
+    common_files = boot.get("common_files", ["identity/identity-rules.md", "identity/state/status.md"])
+    path = common_files[1] if len(common_files) > 1 else "identity/state/status.md"
+    content = await github.read_file(user, path)
     return {"content": content}
 
 
@@ -268,18 +217,20 @@ async def get_personalities(user: UserConfig) -> dict:
 async def get_personality(user: UserConfig, mode: str) -> dict:
     """Get behavioral rules and context for a specific personality."""
     mode = validate_mode(mode)
+    boot = await _read_boot_json(user)
+    personality_dir = boot.get("personality_directory", "identity/personalities")
 
     try:
-        personality_json = await github.read_file(
-            user, f"identity/personalities/{mode}/personality.json"
+        personality_json_content = await github.read_file(
+            user, f"{personality_dir}/{mode}/personality.json"
         )
     except FileNotFoundError_:
         raise InvalidModeError(mode)
 
-    personality_data = json.loads(personality_json)
+    personality_data = json.loads(personality_json_content)
 
     behavior = await github.read_file(
-        user, f"identity/personalities/{mode}/behavior-rules-and-context.md"
+        user, f"{personality_dir}/{mode}/behavior.md"
     )
 
     return {
@@ -293,12 +244,13 @@ async def update_personality(
 ) -> dict:
     """Update behavioral rules for a specific personality.
 
-    Only updates behavior-rules-and-context.md. personality.json is admin-only.
+    Only updates behavior.md. personality.json is admin-only.
     """
     mode = validate_mode(mode)
-    path = f"identity/personalities/{mode}/behavior-rules-and-context.md"
+    boot = await _read_boot_json(user)
+    personality_dir = boot.get("personality_directory", "identity/personalities")
+    path = f"{personality_dir}/{mode}/behavior.md"
 
-    # Verify personality exists
     try:
         _, sha = await github.read_file_with_sha(user, path)
     except FileNotFoundError_:
@@ -334,12 +286,11 @@ async def detect_mode(user: UserConfig, message: str) -> dict:
         if not trigger_words:
             continue
 
-        # Count how many trigger words appear in the message
         score = 0
         for tw in trigger_words:
             tw_words = set(tw.split())
             if tw_words.issubset(message_words):
-                score += len(tw_words)  # Multi-word triggers score higher
+                score += len(tw_words)
             elif tw in message_lower:
                 score += 1
 
@@ -348,7 +299,7 @@ async def detect_mode(user: UserConfig, message: str) -> dict:
             best_match = personality
 
     if best_match and best_score > 0:
-        confidence = min(best_score / 3.0, 1.0)  # Normalize to 0-1
+        confidence = min(best_score / 3.0, 1.0)
         return {
             "mode": best_match["name"],
             "display_name": best_match["display_name"],
