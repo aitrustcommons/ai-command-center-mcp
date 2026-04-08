@@ -1,11 +1,15 @@
 #!/bin/bash
-# One-time server setup for AiCC MCP Server
+# One-time server setup for AiCC platform (website + MCP server)
 # Run as root on a fresh Ubuntu 24.04 droplet
-# Usage: bash deployment/scripts/setup.sh
+#
+# Usage: bash /opt/mcp/deployment/scripts/setup.sh
+#
+# This sets up the shared infrastructure for both the website and MCP server.
+# After running this, clone both repos and run the deploy script.
 
 set -euo pipefail
 
-echo "=== AiCC MCP Server -- Initial Setup ==="
+echo "=== AiCC Platform -- Initial Setup ==="
 
 # Update system
 echo "Updating system packages..."
@@ -41,10 +45,10 @@ else
     echo "nginx already installed."
 fi
 
-# Create application directories
+# Create shared directories
 echo "Creating directories..."
-mkdir -p /opt/app/data
-mkdir -p /opt/app/logs
+mkdir -p /opt/data   # shared SQLite DB (both containers mount this)
+mkdir -p /opt/logs   # MCP server logs
 
 # Add rate limiting zone to nginx.conf if not already present
 if ! grep -q "limit_req_zone.*mcp" /etc/nginx/nginx.conf; then
@@ -52,35 +56,39 @@ if ! grep -q "limit_req_zone.*mcp" /etc/nginx/nginx.conf; then
     sed -i '/http {/a \    limit_req_zone $binary_remote_addr zone=mcp:10m rate=30r/m;' /etc/nginx/nginx.conf
 fi
 
-# Copy nginx config
-echo "Configuring nginx..."
-cp /opt/app/deployment/nginx/aicc-mcp.conf /etc/nginx/sites-available/aicc-mcp.conf
-
-# Remove default site if exists
+# Remove default nginx site
 rm -f /etc/nginx/sites-enabled/default
-
-# Enable site
-ln -sf /etc/nginx/sites-available/aicc-mcp.conf /etc/nginx/sites-enabled/aicc-mcp.conf
-
-# Create production env file if not exists
-if [ ! -f /opt/app/deployment/.env.production ]; then
-    echo "Creating .env.production from template..."
-    cp /opt/app/deployment/.env.production.example /opt/app/deployment/.env.production
-    echo "Edit /opt/app/deployment/.env.production with your settings."
-fi
-
-# Initialize the database
-echo "Initializing database..."
-cd /opt/app
-docker compose -f deployment/docker/docker-compose.prod.yml build
-docker compose -f deployment/docker/docker-compose.prod.yml up -d
 
 echo ""
 echo "=== Setup complete ==="
 echo ""
 echo "Next steps:"
-echo "  1. Edit /opt/app/deployment/.env.production"
-echo "  2. Wait for DNS propagation, then run: bash deployment/scripts/setup-ssl.sh"
-echo "  3. Run: bash deployment/scripts/setup-firewall.sh"
-echo "  4. Add users: docker exec -it aicc-mcp python -m src.admin.cli add ..."
-echo "  5. Verify: curl https://mcp.theintentlayer.com/health"
+echo "  1. Clone repos:"
+echo "     git clone https://github.com/TheIntentLayer/theintentlayer.com.git /opt/web"
+echo "     git clone https://github.com/TheIntentLayer/ai-command-center-mcp.git /opt/mcp"
+echo ""
+echo "  2. Create env files:"
+echo "     cp /opt/web/.env.example /opt/web/.env  # edit secrets"
+echo "     cp /opt/mcp/.env.example /opt/mcp/.env  # edit secrets"
+echo "     (JWT_SECRET / AICC_JWT_SECRET must match between both files)"
+echo ""
+echo "  3. Install nginx config:"
+echo "     cp /opt/web/deployment/nginx/theintentlayer.conf /etc/nginx/sites-available/aicc"
+echo "     ln -sf /etc/nginx/sites-available/aicc /etc/nginx/sites-enabled/aicc"
+echo "     nginx -t && systemctl reload nginx"
+echo ""
+echo "  4. Setup SSL (after DNS propagation):"
+echo "     bash /opt/mcp/deployment/scripts/setup-ssl.sh"
+echo ""
+echo "  5. Setup firewall:"
+echo "     bash /opt/mcp/deployment/scripts/setup-firewall.sh"
+echo ""
+echo "  6. Deploy:"
+echo "     bash /opt/web/deployment/scripts/deploy.sh all"
+echo ""
+echo "  7. Add users:"
+echo "     docker exec -it aicc-mcp python -m src.admin.cli add ..."
+echo ""
+echo "  8. Verify:"
+echo "     curl https://mcp.theintentlayer.com/health"
+echo "     curl https://theintentlayer.com/"

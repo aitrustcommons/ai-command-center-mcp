@@ -1,42 +1,36 @@
 #!/bin/bash
-# Deploy latest code to the droplet
-# Run on the droplet after git pull
-# Usage: bash deployment/scripts/deploy.sh
+# Deploy MCP server to production
+#
+# This is a convenience wrapper. The canonical deploy infrastructure lives
+# in the web repo (theintentlayer.com). This script SSHes to the droplet
+# and runs the canonical deploy script for the MCP service only.
+#
+# Usage (from local machine):
+#   bash deployment/scripts/deploy.sh
+#
+# What it does:
+#   1. Checks for uncommitted changes (refuses to deploy dirty state)
+#   2. SSHes to the droplet
+#   3. Runs the canonical deploy: /opt/web/deployment/scripts/deploy.sh mcp
 
 set -euo pipefail
 
-APP_DIR="/opt/app"
+DROPLET="root@64.23.155.158"
 
-echo "=== Deploying AiCC MCP Server ==="
+echo "=== Deploy MCP Server ==="
 
-cd "${APP_DIR}"
-
-# Pull latest code
-echo "Pulling latest code..."
-git pull origin main
-
-# Rebuild and restart container
-echo "Rebuilding container..."
-docker compose -f deployment/docker/docker-compose.prod.yml build
-
-echo "Restarting container..."
-docker compose -f deployment/docker/docker-compose.prod.yml down
-docker compose -f deployment/docker/docker-compose.prod.yml up -d
-
-# Wait for container to be healthy
-echo "Waiting for server to start..."
-sleep 3
-
-# Health check
-echo "Checking health..."
-if curl -sf http://127.0.0.1:8443/health > /dev/null 2>&1; then
-    echo "Health check passed."
-    curl -s http://127.0.0.1:8443/health | python3 -m json.tool
-else
-    echo "WARNING: Health check failed. Check logs:"
-    echo "  docker logs aicc-mcp --tail 50"
+# Safety: refuse to deploy with uncommitted changes
+if [[ -n "$(git status --porcelain)" ]]; then
+    echo "ERROR: Uncommitted local changes. Commit and push first."
+    echo ""
+    git status --short
+    exit 1
 fi
 
+# Show what we're deploying
+echo "Local HEAD: $(git log --oneline -1)"
+echo "Deploying to: ${DROPLET}"
 echo ""
-echo "=== Deploy complete ==="
-echo "Logs: docker logs aicc-mcp --tail 50 -f"
+
+# Run the canonical deploy script on the droplet
+ssh "${DROPLET}" "bash /opt/web/deployment/scripts/deploy.sh mcp"

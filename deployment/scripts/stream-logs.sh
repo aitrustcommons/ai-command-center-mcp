@@ -1,7 +1,7 @@
 #!/bin/bash
 # Stream logs from the MCP server to the local terminal
 # Usage (from local machine):
-#   ssh root@<droplet-ip> bash /opt/app/deployment/scripts/stream-logs.sh
+#   ssh root@<droplet-ip> bash /opt/mcp/deployment/scripts/stream-logs.sh
 # Or run directly on the droplet:
 #   bash deployment/scripts/stream-logs.sh
 
