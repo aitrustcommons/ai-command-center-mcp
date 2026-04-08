@@ -17,7 +17,7 @@ logger = logging.getLogger("auth")
 current_user: ContextVar[UserConfig | None] = ContextVar("current_user", default=None)
 
 # Paths that don't require authentication
-PUBLIC_PATHS = {"/health", "/favicon.ico"}
+PUBLIC_PATHS = {"/health", "/favicon.ico", "/tools"}
 
 # Well-known paths that must be public for OAuth discovery
 WELLKNOWN_PREFIXES = ("/.well-known/",)
