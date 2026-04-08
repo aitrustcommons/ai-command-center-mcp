@@ -104,6 +104,7 @@ def _handle_tool_error(e: Exception) -> dict:
 # ---------------------------------------------------------------------------
 @mcp.tool(
     name="load_context",
+    annotations={"readOnlyHint": True, "idempotentHint": True},
     description=(
         "Load the full AI partner context for a conversation. Returns: identity rules "
         "(the non-negotiable behavioral rules for every conversation), current status "
@@ -131,6 +132,7 @@ async def tool_load_context(mode: str | None = None) -> dict:
 
 @mcp.tool(
     name="get_identity_rules",
+    annotations={"readOnlyHint": True, "idempotentHint": True},
     description=(
         "Get the core identity and behavioral rules that apply in every conversation "
         "regardless of mode. These define: who the human partner is, how they work, "
@@ -150,6 +152,7 @@ async def tool_get_identity_rules() -> dict:
 
 @mcp.tool(
     name="update_identity_rules",
+    annotations={"readOnlyHint": False, "destructiveHint": False},
     description=(
         "Update the core identity rules that apply across all modes. Use this when a "
         "conversation reveals a new universal rule -- something that should apply in "
@@ -169,6 +172,7 @@ async def tool_update_identity_rules(content: str, change_summary: str) -> dict:
 
 @mcp.tool(
     name="get_current_status",
+    annotations={"readOnlyHint": True, "idempotentHint": True},
     description=(
         "Get the current status of all active work, deadlines, recent decisions, and "
         "open items across every mode. This is the shared state that all conversations "
@@ -188,6 +192,7 @@ async def tool_get_current_status() -> dict:
 
 @mcp.tool(
     name="get_personalities",
+    annotations={"readOnlyHint": True, "idempotentHint": True},
     description=(
         "Get all available personalities with their names, descriptions, and trigger "
         "keywords. Use this to understand what personalities exist and to match a "
@@ -207,6 +212,7 @@ async def tool_get_personalities() -> dict:
 
 @mcp.tool(
     name="get_personality",
+    annotations={"readOnlyHint": True, "idempotentHint": True},
     description=(
         "Get the behavioral rules and context for a specific personality mode. Each "
         "mode defines: the conversation's focus area, tone and communication style, "
@@ -223,6 +229,7 @@ async def tool_get_personality(mode: str) -> dict:
 
 @mcp.tool(
     name="update_personality",
+    annotations={"readOnlyHint": False, "destructiveHint": False},
     description=(
         "Update the behavioral rules for a specific personality mode. Use this when a "
         "conversation reveals a new rule that applies only to this mode -- not "
@@ -243,6 +250,7 @@ async def tool_update_personality(
 
 @mcp.tool(
     name="get_recent_activity",
+    annotations={"readOnlyHint": True, "idempotentHint": True},
     description=(
         "Get a summary of recent changes to the project. Returns the most recent "
         "commits with their messages, showing what was changed, by whom, and when.\n\n"
@@ -260,6 +268,7 @@ async def tool_get_recent_activity(count: int = 20) -> dict:
 
 @mcp.tool(
     name="detect_mode",
+    annotations={"readOnlyHint": True, "idempotentHint": True},
     description=(
         "Given a user's opening message, determine which personality mode best matches "
         "the conversation topic. Returns the recommended mode name and confidence level.\n\n"
@@ -284,6 +293,7 @@ async def tool_detect_mode(message: str) -> dict:
 # ---------------------------------------------------------------------------
 @mcp.tool(
     name="list_content",
+    annotations={"readOnlyHint": True, "idempotentHint": True},
     description=(
         "List the contents of a directory in the project. Returns file and folder names "
         "with basic metadata (type, size).\n\n"
@@ -301,6 +311,7 @@ async def tool_list_content(path: str = "") -> dict:
 
 @mcp.tool(
     name="get_document",
+    annotations={"readOnlyHint": True, "idempotentHint": True},
     description="Read the full contents of a document.",
 )
 async def tool_get_document(path: str) -> dict:
@@ -313,6 +324,7 @@ async def tool_get_document(path: str) -> dict:
 
 @mcp.tool(
     name="create_document",
+    annotations={"readOnlyHint": False, "destructiveHint": False},
     description=(
         "Create a new document. This will fail if a document already exists at the "
         "given path -- use update_document() to modify existing documents."
@@ -330,6 +342,7 @@ async def tool_create_document(
 
 @mcp.tool(
     name="update_document",
+    annotations={"readOnlyHint": False, "destructiveHint": False},
     description=(
         "Update an existing document. This will fail if no document exists at the "
         "given path -- use create_document() for new files."
@@ -347,6 +360,7 @@ async def tool_update_document(
 
 @mcp.tool(
     name="move_document",
+    annotations={"readOnlyHint": False, "destructiveHint": True},
     description="Move or rename a document or folder.",
 )
 async def tool_move_document(
@@ -361,6 +375,7 @@ async def tool_move_document(
 
 @mcp.tool(
     name="delete_document",
+    annotations={"readOnlyHint": False, "destructiveHint": True},
     description=(
         "Delete a document. This is irreversible. The AI should confirm with the human "
         "before calling this."
@@ -379,6 +394,7 @@ async def tool_delete_document(path: str, commit_message: str) -> dict:
 # ---------------------------------------------------------------------------
 @mcp.tool(
     name="get_tracking_areas",
+    annotations={"readOnlyHint": True, "idempotentHint": True},
     description=(
         "Get all valid work areas the user can assign work items to. Returns area name, "
         "full area path, and which personality handles it.\n\n"
@@ -396,6 +412,7 @@ async def tool_get_tracking_areas() -> dict:
 
 @mcp.tool(
     name="list_work_items",
+    annotations={"readOnlyHint": True, "idempotentHint": True},
     description=(
         "List work items, optionally filtered. Returns a summary list with ID, title, "
         "state, priority, and area."
@@ -418,6 +435,7 @@ async def tool_list_work_items(
 
 @mcp.tool(
     name="get_work_item",
+    annotations={"readOnlyHint": True, "idempotentHint": True},
     description=(
         "Get full details of a specific work item including description, comments, "
         "and history."
@@ -433,6 +451,7 @@ async def tool_get_work_item(id: int) -> dict:
 
 @mcp.tool(
     name="create_work_item",
+    annotations={"readOnlyHint": False, "destructiveHint": False},
     description=(
         "Create a new work item for tracking. Use get_tracking_areas() first to see "
         "valid area names."
@@ -461,6 +480,7 @@ async def tool_create_work_item(
 
 @mcp.tool(
     name="update_work_item",
+    annotations={"readOnlyHint": False, "destructiveHint": False},
     description=(
         "Update a work item's fields. The AI should NEVER close a work item without "
         "explicit human confirmation."
@@ -476,6 +496,7 @@ async def tool_update_work_item(id: int, changes: dict) -> dict:
 
 @mcp.tool(
     name="add_comment",
+    annotations={"readOnlyHint": False, "destructiveHint": False},
     description=(
         "Add a comment to a work item. Comments are the primary way context gets "
         "passed between conversations and sessions. Write comments that a future AI "
@@ -492,6 +513,7 @@ async def tool_add_comment(id: int, text: str) -> dict:
 
 @mcp.tool(
     name="log_daily_summary",
+    annotations={"readOnlyHint": False, "destructiveHint": False},
     description=(
         "Log a daily summary of what was accomplished, decided, and left open. This "
         "creates a work item tagged 'daily-log' with today's date, or adds to an "
@@ -505,6 +527,26 @@ async def tool_log_daily_summary(summary: str) -> dict:
         return await work_items.log_daily_summary_tool(user, summary)
     except Exception as e:
         return _handle_tool_error(e)
+
+
+# ---------------------------------------------------------------------------
+# Public tools listing (no auth required, used by OAuth consent page)
+# ---------------------------------------------------------------------------
+@mcp.custom_route("/tools", methods=["GET"])
+async def list_tools_public(request: Request) -> JSONResponse:
+    """Public endpoint listing tools with annotations for OAuth consent page."""
+    registered = await mcp.list_tools()
+    tools = []
+    for tool in registered:
+        annotations = {}
+        if tool.annotations:
+            annotations = tool.annotations.model_dump(exclude_none=True)
+        tools.append({
+            "name": tool.name,
+            "description": (tool.description or "")[:100],
+            "annotations": annotations,
+        })
+    return JSONResponse(content={"tools": tools})
 
 
 # ---------------------------------------------------------------------------
