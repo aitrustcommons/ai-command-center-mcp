@@ -8,11 +8,19 @@ from src.db import UserConfig
 from src.exceptions import AzDevOpsNotConfiguredError
 from src.tools.work_items import (
     add_comment_tool,
+    attach_file_tool,
+    cascade_tool,
+    close_work_item_tool,
     create_work_item_tool,
+    daily_logs_tool,
+    edit_comment_tool,
     get_tracking_areas,
     get_work_item_tool,
+    list_attachments_tool,
     list_work_items_tool,
     log_daily_summary_tool,
+    reopen_work_item_tool,
+    search_work_items_tool,
     update_work_item_tool,
 )
 
@@ -142,6 +150,165 @@ def test_validate_work_item_id():
 
     with pytest.raises(ValueError):
         validate_work_item_id("abc")
+
+
+@pytest.mark.asyncio
+@patch("src.tools.work_items.azdevops")
+async def test_close_work_item(mock_azdevops, user):
+    mock_azdevops.update_work_item = AsyncMock(return_value={"id": 42})
+    result = await close_work_item_tool(user, 42)
+    assert result["closed"] is True
+    assert result["state"] == "Done"
+    mock_azdevops.update_work_item.assert_called_once_with(
+        user, 42, {"state": "Done"}
+    )
+
+
+@pytest.mark.asyncio
+@patch("src.tools.work_items.azdevops")
+async def test_reopen_work_item(mock_azdevops, user):
+    mock_azdevops.update_work_item = AsyncMock(return_value={"id": 42})
+    result = await reopen_work_item_tool(user, 42)
+    assert result["reopened"] is True
+    assert result["state"] == "To Do"
+    mock_azdevops.update_work_item.assert_called_once_with(
+        user, 42, {"state": "To Do"}
+    )
+
+
+@pytest.mark.asyncio
+@patch("src.tools.work_items.azdevops")
+async def test_search_work_items(mock_azdevops, user):
+    mock_azdevops.search_work_items = AsyncMock(
+        return_value=[
+            {"id": 1, "title": "MCP server", "state": "Active", "priority": 2, "area": "System", "tags": "", "type": "Issue"},
+        ]
+    )
+    result = await search_work_items_tool(user, "MCP")
+    assert result["count"] == 1
+    assert result["query"] == "MCP"
+
+
+@pytest.mark.asyncio
+@patch("src.tools.work_items.azdevops")
+async def test_attach_file(mock_azdevops, user):
+    mock_azdevops.attach_file = AsyncMock(
+        return_value={
+            "work_item_id": 42,
+            "filename": "notes.txt",
+            "attachment_url": "https://example.com/att/1",
+        }
+    )
+    result = await attach_file_tool(user, 42, "notes.txt", "some content")
+    assert result["attached"] is True
+    assert result["filename"] == "notes.txt"
+
+
+@pytest.mark.asyncio
+@patch("src.tools.work_items.azdevops")
+async def test_list_attachments(mock_azdevops, user):
+    mock_azdevops.list_attachments = AsyncMock(
+        return_value=[
+            {"url": "https://example.com/att/1", "filename": "notes.txt", "comment": "", "added_date": ""},
+        ]
+    )
+    result = await list_attachments_tool(user, 42)
+    assert result["count"] == 1
+    assert result["attachments"][0]["filename"] == "notes.txt"
+
+
+@pytest.mark.asyncio
+@patch("src.tools.work_items.azdevops")
+async def test_edit_comment(mock_azdevops, user):
+    mock_azdevops.edit_comment = AsyncMock(return_value={"id": 99})
+    result = await edit_comment_tool(user, 42, 99, "Updated comment")
+    assert result["edited"] is True
+    assert result["comment_id"] == 99
+
+
+@pytest.mark.asyncio
+@patch("src.tools.work_items.github")
+@patch("src.tools.work_items.azdevops")
+async def test_cascade_article(mock_azdevops, mock_github, user):
+    mock_github.read_file = AsyncMock(
+        return_value=(
+            "# Cascade Checklists\n\n"
+            "## When a new article publishes\n\n"
+            "- [ ] Blog post\n"
+            "- [ ] Medium import\n"
+            "- [ ] Zenodo upload\n\n"
+            "## When a LinkedIn post goes live\n\n"
+            "- [ ] Save post text\n"
+        )
+    )
+    mock_azdevops.create_work_item = AsyncMock(
+        return_value={"id": 100, "_links": {"html": {"href": "https://example.com/100"}}}
+    )
+    result = await cascade_tool(user, "article", "Publish Article 6")
+    assert result["created"] is True
+    assert result["cascade_type"] == "article"
+    assert result["area"] == "AI-Trust-Commons"
+    # Verify the description includes the checklist steps
+    call_args = mock_azdevops.create_work_item.call_args
+    assert "Blog post" in call_args.kwargs["description"]
+
+
+@pytest.mark.asyncio
+async def test_cascade_invalid_type(user):
+    with pytest.raises(ValueError, match="Unknown cascade type"):
+        await cascade_tool(user, "invalid", "Test")
+
+
+@pytest.mark.asyncio
+@patch("src.tools.work_items.azdevops")
+async def test_daily_logs(mock_azdevops, user):
+    mock_azdevops.get_daily_logs = AsyncMock(
+        return_value=[
+            {
+                "id": 268,
+                "title": "Log: April 8, 2026",
+                "state": "To Do",
+                "created_date": "2026-04-08",
+                "comments": [{"id": 1, "text": "Built MCP tools", "created_by": "Claude", "created_date": "2026-04-08"}],
+            }
+        ]
+    )
+    result = await daily_logs_tool(user, 7)
+    assert result["count"] == 1
+    assert result["days"] == 7
+    assert result["logs"][0]["title"] == "Log: April 8, 2026"
+
+
+@pytest.mark.asyncio
+@patch("src.tools.work_items.azdevops")
+async def test_get_work_item_includes_attachments(mock_azdevops, user):
+    mock_azdevops.get_work_item = AsyncMock(
+        return_value={
+            "id": 42,
+            "fields": {
+                "System.Title": "Test",
+                "System.State": "Active",
+                "Microsoft.VSTS.Common.Priority": 2,
+                "System.AreaPath": "TestProject\\System",
+                "System.Description": "Desc",
+                "System.Tags": "",
+                "System.WorkItemType": "Issue",
+                "System.CreatedDate": "2026-04-08",
+                "System.ChangedDate": "2026-04-08",
+                "System.CommentCount": 0,
+            },
+            "relations": [
+                {
+                    "rel": "AttachedFile",
+                    "url": "https://example.com/att/1",
+                    "attributes": {"name": "notes.txt", "comment": "Attached: notes.txt", "resourceCreatedDate": "2026-04-08"},
+                }
+            ],
+        }
+    )
+    result = await get_work_item_tool(user, 42)
+    assert len(result["attachments"]) == 1
+    assert result["attachments"][0]["filename"] == "notes.txt"
 
 
 def test_validate_priority():

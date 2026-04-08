@@ -387,6 +387,257 @@ async def list_work_items(
     ]
 
 
+async def search_work_items(
+    user: UserConfig, query: str
+) -> list[dict]:
+    """Search work items by keyword across title and description."""
+    _check_configured(user)
+
+    # Escape single quotes in query for WIQL
+    safe_query = query.replace("'", "''")
+
+    wiql = (
+        f"SELECT [System.Id], [System.Title], [System.State], "
+        f"[Microsoft.VSTS.Common.Priority], [System.AreaPath] "
+        f"FROM WorkItems "
+        f"WHERE [System.TeamProject] = '{user.az_project}' "
+        f"AND [System.State] <> 'Removed' "
+        f"AND ([System.Title] CONTAINS '{safe_query}' "
+        f"OR [System.Description] CONTAINS '{safe_query}') "
+        f"ORDER BY [System.ChangedDate] DESC"
+    )
+
+    ids = await wiql_query(user, wiql)
+
+    if not ids:
+        return []
+
+    items = await get_work_items_batch(user, ids)
+
+    return [
+        {
+            "id": item["id"],
+            "title": item["fields"].get("System.Title", ""),
+            "state": item["fields"].get("System.State", ""),
+            "priority": item["fields"].get("Microsoft.VSTS.Common.Priority", 0),
+            "area": item["fields"].get("System.AreaPath", ""),
+            "tags": item["fields"].get("System.Tags", ""),
+            "type": item["fields"].get("System.WorkItemType", ""),
+        }
+        for item in items
+    ]
+
+
+async def upload_attachment(
+    user: UserConfig, filename: str, content: str
+) -> str:
+    """Upload an attachment and return the attachment URL."""
+    _check_configured(user)
+
+    start = time.time()
+    url = (
+        f"{_base_url(user)}/{user.az_project}/_apis/wit/attachments"
+        f"?fileName={filename}&api-version={API_VERSION}"
+    )
+
+    headers = _headers(user)
+    headers["Content-Type"] = "application/octet-stream"
+
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        response = await client.post(url, headers=headers, content=content.encode())
+
+    duration_ms = int((time.time() - start) * 1000)
+
+    if response.status_code not in (200, 201):
+        logger.error(
+            f"[{user.name}] AZDEVOPS upload_attachment '{filename}' "
+            f"-> {response.status_code} ({duration_ms}ms)"
+        )
+        raise AzDevOpsAPIError(response.status_code, response.text)
+
+    logger.info(
+        f"[{user.name}] AZDEVOPS upload_attachment '{filename}' "
+        f"-> {response.status_code} ({duration_ms}ms)"
+    )
+
+    return response.json().get("url", "")
+
+
+async def attach_file(
+    user: UserConfig, work_item_id: int, filename: str, content: str
+) -> dict:
+    """Upload an attachment and link it to a work item."""
+    _check_configured(user)
+
+    # Step 1: Upload the attachment
+    attachment_url = await upload_attachment(user, filename, content)
+
+    # Step 2: Link attachment to work item via JSON Patch
+    start = time.time()
+    url = (
+        f"{_base_url(user)}/{user.az_project}/_apis/wit/workitems/{work_item_id}"
+        f"?api-version={API_VERSION}"
+    )
+
+    operations = [
+        {
+            "op": "add",
+            "path": "/relations/-",
+            "value": {
+                "rel": "AttachedFile",
+                "url": attachment_url,
+                "attributes": {"comment": f"Attached: {filename}"},
+            },
+        }
+    ]
+
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        response = await client.patch(
+            url, headers=_patch_headers(user), json=operations
+        )
+
+    duration_ms = int((time.time() - start) * 1000)
+
+    if response.status_code == 404:
+        raise AzDevOpsAPIError(
+            404, f"Work item {work_item_id} not found", work_item_id
+        )
+
+    if response.status_code != 200:
+        logger.error(
+            f"[{user.name}] AZDEVOPS attach_file {work_item_id} '{filename}' "
+            f"-> {response.status_code} ({duration_ms}ms)"
+        )
+        raise AzDevOpsAPIError(response.status_code, response.text, work_item_id)
+
+    logger.info(
+        f"[{user.name}] AZDEVOPS attach_file {work_item_id} '{filename}' "
+        f"-> 200 ({duration_ms}ms)"
+    )
+
+    return {
+        "work_item_id": work_item_id,
+        "filename": filename,
+        "attachment_url": attachment_url,
+    }
+
+
+async def list_attachments(user: UserConfig, work_item_id: int) -> list[dict]:
+    """List attachments on a work item by reading its relations."""
+    _check_configured(user)
+
+    item = await get_work_item(user, work_item_id)
+    relations = item.get("relations", []) or []
+
+    attachments = []
+    for rel in relations:
+        if rel.get("rel") == "AttachedFile":
+            attrs = rel.get("attributes", {})
+            attachments.append({
+                "url": rel.get("url", ""),
+                "filename": attrs.get("name", attrs.get("comment", "")),
+                "comment": attrs.get("comment", ""),
+                "added_date": attrs.get("resourceCreatedDate", ""),
+            })
+
+    return attachments
+
+
+async def edit_comment(
+    user: UserConfig, work_item_id: int, comment_id: int, text: str
+) -> dict:
+    """Edit an existing comment on a work item."""
+    _check_configured(user)
+
+    start = time.time()
+    url = (
+        f"{_base_url(user)}/{user.az_project}/_apis/wit/workitems/{work_item_id}"
+        f"/comments/{comment_id}?api-version={COMMENT_API_VERSION}"
+    )
+
+    body = {"text": _convert_newlines(text)}
+
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        response = await client.patch(url, headers=_headers(user), json=body)
+
+    duration_ms = int((time.time() - start) * 1000)
+
+    if response.status_code == 404:
+        raise AzDevOpsAPIError(
+            404,
+            f"Work item {work_item_id} or comment {comment_id} not found",
+            work_item_id,
+        )
+
+    if response.status_code != 200:
+        logger.error(
+            f"[{user.name}] AZDEVOPS edit_comment {work_item_id}/{comment_id} "
+            f"-> {response.status_code} ({duration_ms}ms)"
+        )
+        raise AzDevOpsAPIError(response.status_code, response.text, work_item_id)
+
+    logger.info(
+        f"[{user.name}] AZDEVOPS edit_comment {work_item_id}/{comment_id} "
+        f"-> 200 ({duration_ms}ms)"
+    )
+
+    return response.json()
+
+
+async def get_daily_logs(user: UserConfig, days: int = 7) -> list[dict]:
+    """Get recent daily log entries with their comments."""
+    _check_configured(user)
+
+    from zoneinfo import ZoneInfo
+
+    cutoff = datetime.now(ZoneInfo("America/Los_Angeles"))
+    cutoff = cutoff.replace(hour=0, minute=0, second=0, microsecond=0)
+    from datetime import timedelta
+    cutoff = cutoff - timedelta(days=days)
+    cutoff_str = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    wiql = (
+        f"SELECT [System.Id] FROM WorkItems "
+        f"WHERE [System.TeamProject] = '{user.az_project}' "
+        f"AND [System.Tags] CONTAINS 'daily-log' "
+        f"AND [System.State] <> 'Removed' "
+        f"AND [System.CreatedDate] >= '{cutoff_str}' "
+        f"ORDER BY [System.CreatedDate] DESC"
+    )
+
+    ids = await wiql_query(user, wiql)
+
+    if not ids:
+        return []
+
+    # Fetch full details with comments
+    results = []
+    for wid in ids:
+        item = await get_work_item(user, wid)
+        fields = item.get("fields", {})
+
+        comments = []
+        comment_data = item.get("comments", {})
+        if isinstance(comment_data, dict):
+            for c in comment_data.get("comments", []):
+                comments.append({
+                    "id": c.get("id"),
+                    "text": c.get("text", ""),
+                    "created_by": c.get("createdBy", {}).get("displayName", ""),
+                    "created_date": c.get("createdDate", ""),
+                })
+
+        results.append({
+            "id": item["id"],
+            "title": fields.get("System.Title", ""),
+            "state": fields.get("System.State", ""),
+            "created_date": fields.get("System.CreatedDate", ""),
+            "comments": comments,
+        })
+
+    return results
+
+
 async def find_daily_log(user: UserConfig, date_str: str) -> int | None:
     """Find today's daily log work item. Returns work item ID or None."""
     _check_configured(user)

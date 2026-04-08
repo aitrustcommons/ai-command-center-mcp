@@ -1,6 +1,6 @@
 """AiCC MCP Server -- entry point.
 
-Registers all 22 tools with the MCP SDK, mounts auth middleware,
+Registers all 30 tools with the MCP SDK, mounts auth middleware,
 adds health check endpoint, and runs via Streamable HTTP transport.
 """
 
@@ -390,7 +390,7 @@ async def tool_delete_document(path: str, commit_message: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Work Item Tools (7)
+# Work Item Tools (15)
 # ---------------------------------------------------------------------------
 @mcp.tool(
     name="get_tracking_areas",
@@ -525,6 +525,143 @@ async def tool_log_daily_summary(summary: str) -> dict:
     try:
         user = _get_user()
         return await work_items.log_daily_summary_tool(user, summary)
+    except Exception as e:
+        return _handle_tool_error(e)
+
+
+@mcp.tool(
+    name="close_work_item",
+    annotations={"readOnlyHint": False, "destructiveHint": True},
+    description=(
+        "Close a work item by transitioning it to Done. NEVER close a work item "
+        "without explicit human confirmation. Always ask first."
+    ),
+)
+async def tool_close_work_item(id: int) -> dict:
+    try:
+        user = _get_user()
+        return await work_items.close_work_item_tool(user, id)
+    except Exception as e:
+        return _handle_tool_error(e)
+
+
+@mcp.tool(
+    name="reopen_work_item",
+    annotations={"readOnlyHint": False, "destructiveHint": False},
+    description=(
+        "Reopen a work item by transitioning it back to To Do from Done. Use this "
+        "when a closed item needs to be revisited."
+    ),
+)
+async def tool_reopen_work_item(id: int) -> dict:
+    try:
+        user = _get_user()
+        return await work_items.reopen_work_item_tool(user, id)
+    except Exception as e:
+        return _handle_tool_error(e)
+
+
+@mcp.tool(
+    name="search_work_items",
+    annotations={"readOnlyHint": True, "idempotentHint": True},
+    description=(
+        "Search work items by keyword across title and description. Returns matching "
+        "items sorted by most recently changed.\n\n"
+        "Use this when you need to find work items by topic rather than structured "
+        "filters. For filtering by area, state, priority, or tags, use list_work_items() "
+        "instead."
+    ),
+)
+async def tool_search_work_items(query: str) -> dict:
+    try:
+        user = _get_user()
+        return await work_items.search_work_items_tool(user, query)
+    except Exception as e:
+        return _handle_tool_error(e)
+
+
+@mcp.tool(
+    name="attach_file",
+    annotations={"readOnlyHint": False, "destructiveHint": False},
+    description=(
+        "Attach a file to a work item. The file content is provided as text. "
+        "Use this to attach logs, reports, or other text-based artifacts to a "
+        "work item for reference."
+    ),
+)
+async def tool_attach_file(id: int, filename: str, content: str) -> dict:
+    try:
+        user = _get_user()
+        return await work_items.attach_file_tool(user, id, filename, content)
+    except Exception as e:
+        return _handle_tool_error(e)
+
+
+@mcp.tool(
+    name="list_attachments",
+    annotations={"readOnlyHint": True, "idempotentHint": True},
+    description="List all attachments on a work item.",
+)
+async def tool_list_attachments(id: int) -> dict:
+    try:
+        user = _get_user()
+        return await work_items.list_attachments_tool(user, id)
+    except Exception as e:
+        return _handle_tool_error(e)
+
+
+@mcp.tool(
+    name="edit_comment",
+    annotations={"readOnlyHint": False, "destructiveHint": False},
+    description=(
+        "Edit an existing comment on a work item. Use get_work_item() first to see "
+        "comment IDs. Use this to correct typos or update information in a previously "
+        "posted comment."
+    ),
+)
+async def tool_edit_comment(id: int, comment_id: int, text: str) -> dict:
+    try:
+        user = _get_user()
+        return await work_items.edit_comment_tool(user, id, comment_id, text)
+    except Exception as e:
+        return _handle_tool_error(e)
+
+
+@mcp.tool(
+    name="cascade",
+    annotations={"readOnlyHint": False, "destructiveHint": False},
+    description=(
+        "Create a cascade work item with checklist steps for a specific event type. "
+        "Reads the cascade checklist from the project, extracts the relevant section, "
+        "and creates a P1 work item with all steps as checkboxes.\n\n"
+        "Valid cascade types: article, book, linkedin, narrative, product, workstream, "
+        "session-close, resume, zenodo.\n\n"
+        "Example: cascade('article', 'Publish Article 6: Copilot validates Intent Layer')"
+    ),
+)
+async def tool_cascade(type: str, title: str) -> dict:
+    try:
+        user = _get_user()
+        return await work_items.cascade_tool(user, type, title)
+    except Exception as e:
+        return _handle_tool_error(e)
+
+
+@mcp.tool(
+    name="daily_logs",
+    annotations={"readOnlyHint": True, "idempotentHint": True},
+    description=(
+        "Show recent daily log entries with their comments. Returns daily logs from "
+        "the last N days, each with all comments (which contain the actual session "
+        "summaries).\n\n"
+        "Daily logs are the richest source of session context. Use this to understand "
+        "what happened in recent sessions."
+    ),
+)
+async def tool_daily_logs(days: int = 7) -> dict:
+    try:
+        user = _get_user()
+        return await work_items.daily_logs_tool(user, days)
     except Exception as e:
         return _handle_tool_error(e)
 
